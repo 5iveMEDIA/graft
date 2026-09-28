@@ -75,10 +75,10 @@ test('every event carries the common properties, and no identifier beyond them',
 
 // Pinned rather than counted, so adding an event is a deliberate edit here and
 // a matching row in TELEMETRY.md, never something that arrives with a feature.
-test('the contract lists exactly the nine documented events', () => {
+test('the contract lists exactly the ten documented events', () => {
   assert.deepEqual(Object.keys(EVENTS).sort(), [
     'brain_signup_opened', 'brain_signup_settled', 'build_completed', 'build_failed',
-    'first_run', 'init_completed', 'install', 'query', 'session_summary',
+    'first_run', 'init_completed', 'install', 'query', 'session_summary', 'trail_pulled',
   ]);
 });
 
@@ -209,4 +209,19 @@ test('brain signup: opened carries only whether an agent ran it', () => {
 test('brain signup: both events are in the contract', () => {
   assert.ok(EVENTS.brain_signup_opened);
   assert.ok(EVENTS.brain_signup_settled);
+});
+
+// --- trail pull ---
+
+test('trail pull: counts travel as buckets, and a path never rides along', () => {
+  const home = sandbox('tel-trail-pulled');
+  const ev = track(
+    'trail_pulled',
+    { outcome: 'written', kinds: 'agents_md,claude_md', files_bucket: '1-4', changes_bucket: '5-19', skipped_bucket: '0', path: 'web/CLAUDE.md' },
+    { home, env: OPEN },
+  );
+  assert.equal(ev?.properties.outcome, 'written');
+  assert.equal(ev?.properties.kinds, 'agents_md,claude_md');
+  assert.equal(ev?.properties.changes_bucket, '5-19');
+  assert.equal(ev?.properties.path, undefined);
 });

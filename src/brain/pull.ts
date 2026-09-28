@@ -25,6 +25,8 @@ import {
 } from "./context-files.js";
 import type { BrainLink } from "./link.js";
 import { reviewUrl } from "./signup.js";
+import { CONTEXT_FILE_KINDS, countBucket, type TrailPullOutcome } from "../telemetry/contract.js";
+import { track } from "../telemetry/track.js";
 
 export interface PullOptions {
   home: string;
@@ -57,6 +59,30 @@ export function rulesLine(repo: string, res: ConnectResult): string | null {
 interface Planned {
   plan: FilePlan;
   source: "claude-md" | "context-files";
+  kind: string;
+}
+
+/**
+ * The `trail_pulled` event for one pull. Only the outcome, which kinds of file
+ * were written, and bucketed counts leave the machine — see TELEMETRY.md.
+ */
+function trackPull(repo: string, home: string | undefined, outcome: TrailPullOutcome, planned: Planned[] = []): void {
+  const wrote = planned.filter((p) => p.plan.status && p.plan.written.length > 0);
+  const kinds = [...new Set(wrote.map((p) => p.kind))]
+    .filter((k) => (CONTEXT_FILE_KINDS as readonly string[]).includes(k))
+    .sort()
+    .join(",");
+  track(
+    "trail_pulled",
+    {
+      outcome,
+      kinds,
+      files_bucket: countBucket(wrote.length),
+      changes_bucket: countBucket(wrote.reduce((n, p) => n + p.plan.written.length, 0)),
+      skipped_bucket: countBucket(planned.reduce((n, p) => n + p.plan.skipped.length, 0)),
+    },
+    { repo, home },
+  );
 }
 
 /**
@@ -93,7 +119,7 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
     const file: ContextFile = { kind: kindForPath(md.path || "CLAUDE.md"), path: md.path || "CLAUDE.md", changes: md.changes };
     if (readByWired(file.kind, opts.wired)) {
       accepted += file.changes.length;
-      planned.push({ plan: planContextFile(repo, file), source: "claude-md" });
+      planned.push({ plan: planContextFile(repo, file), source: "claude-md", kind: file.kind });
     }
   }
 
@@ -105,7 +131,7 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
     for (const file of ctx.files) {
       if (file.changes.length === 0 || !readByWired(file.kind, opts.wired)) continue;
       accepted += file.changes.length;
-      planned.push({ plan: planContextFile(repo, file), source: "context-files" });
+      planned.push({ plan: planContextFile(repo, file), source: "context-files", kind: file.kind });
     }
   }
 
@@ -114,6 +140,7 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
       write("· nothing accepted in Trail yet — review:");
       write(`  ${reviewUrl(link.brainId)}`);
     }
+    trackPull(repo, opts.home, code === 0 ? "nothing_accepted" : "error");
     return code;
   }
 
@@ -140,6 +167,7 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
 
   if (opts.dryRun) {
     write("· dry run — nothing written, and Trail was not told");
+    trackPull(repo, opts.home, "dry_run", planned);
     return code;
   }
 
@@ -161,5 +189,16 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
   const told = (await markApplied(link, done("claude-md"), fetchImpl)) && (await markContextFilesApplied(link, done("context-files"), fetchImpl));
   if (!told) write("⚠ could not tell Trail which changes were written; it may still list them");
   if (writing.length > 0) write("· review with git diff, then commit");
+  const anyWritten = planned.some((p) => p.plan.status && p.plan.written.length > 0);
+  const anyPresent = planned.some((p) => p.plan.present.length > 0);
+  const anySkipped = planned.some((p) => p.plan.skipped.length > 0);
+  const outcome: TrailPullOutcome = anyWritten
+    ? "written"
+    : anyPresent
+      ? "already_present"
+      : anySkipped
+        ? "skipped"
+        : "error";
+  trackPull(repo, opts.home, outcome, planned);
   return code;
 }
