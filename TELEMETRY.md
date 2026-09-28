@@ -47,7 +47,7 @@ The events:
 | `build_failed` | `stage`, `code` — both fixed enums | A build throws |
 | `query` | `command`, `surface` (`cli`/`mcp`/`hook`), `hit` (`ask` only) | Any query command |
 | `brain_signup_opened` | — | `graft trail push` on a repo with no brain opens your browser to make one |
-| `brain_signup_settled` | `outcome` (`linked`/`timed_out`/`no_tty`/`bad_callback`), `duration_bucket` | That handoff ends, one way or the other |
+| `brain_signup_settled` | `outcome` (`linked`/`timed_out`/`no_tty`/`bad_callback`/`stopped`), `duration_bucket` | That handoff ends, one way or the other |
 | `session_summary` | `graft_reads_bucket`, `source_reads_bucket`, `saved_tokens_bucket`, `graft_turns_bucket`, `reported_turns_bucket` | Once, after an agent session ends |
 
 Two rules govern every value above, and both are enforced in code rather than by

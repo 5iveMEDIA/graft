@@ -76,8 +76,8 @@ function sameState(got: string, want: string): boolean {
  * about to close, so there is nothing to style around. */
 function donePage(ok: boolean): string {
   const msg = ok
-    ? "Your brain is connected. Return to your terminal — the push is already running."
-    : "That handoff did not match this terminal. Run `graft trail push` again.";
+    ? "Your trail is connected. Return to your terminal — the push is already running."
+    : "That sign-up doesn't match this terminal. Run graft trail push again.";
   return `<!doctype html><meta charset="utf-8"><title>graft</title><body style="font:15px/1.5 system-ui,sans-serif;margin:3rem auto;max-width:32rem;color:#1F2129"><p>${msg}</p><p style="color:#676767">You can close this tab.</p>`;
 }
 
@@ -116,7 +116,7 @@ export async function startHandoff(): Promise<Handoff> {
     if (!brainId || !token) {
       res.writeHead(400, { "content-type": "text/html; charset=utf-8" });
       res.end(donePage(false));
-      settle({ error: "the browser came back without a brain id and token", reason: "bad_callback" });
+      settle({ error: "sign-up came back incomplete · nothing was sent — run graft trail push again", reason: "bad_callback" });
       return;
     }
 
@@ -155,7 +155,13 @@ export async function startHandoff(): Promise<Handoff> {
       let timer: NodeJS.Timeout | undefined;
       const timeout = new Promise<HandoffResult>((resolve) => {
         timer = setTimeout(
-          () => resolve({ error: "timed out waiting for the browser — run `graft trail push` again, or use the link above", reason: "timed_out" }),
+          () =>
+            resolve({
+              error: `no sign-up after ${
+                timeoutMs >= 60_000 ? `${Math.round(timeoutMs / 60_000)} minutes` : `${Math.max(1, Math.round(timeoutMs / 1000))} seconds`
+              } · nothing was sent — run graft trail push again`,
+              reason: "timed_out",
+            }),
           timeoutMs,
         );
         // The timer must not hold the process open once the browser has answered.
@@ -194,6 +200,11 @@ export function webBaseUrl(baseUrl?: string): string {
  * flow shows, and it leads to the graph once there is a graph. */
 export function brainUrl(brainId: string, baseUrl?: string): string {
   return `${webBaseUrl(baseUrl)}/get-started?step=build&brain=${encodeURIComponent(brainId)}`;
+}
+
+/** Where a trail's suggested context-file changes are reviewed and accepted. */
+export function reviewUrl(brainId: string, baseUrl?: string): string {
+  return `${webBaseUrl(baseUrl)}/brain/${encodeURIComponent(brainId)}/claude-md`;
 }
 
 /** Where to send the browser for a repo's brain. */

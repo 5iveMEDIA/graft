@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchExpectedRepo, pushEarlyDigest } from '../src/brain/push.js';
-import { readThreads, type HistoryThread, type RepoDigest } from '../src/app/history.js';
+import { newThreadReadCache, readThreads, THREAD_FETCH_CONCURRENCY, type HistoryThread, type RepoDigest } from '../src/app/history.js';
 import type { BrainLink } from '../src/brain/link.js';
 
 const link = { brainId: 'b1', token: 'gbt_1.x', baseUrl: 'http://trail.test' } as unknown as BrainLink;
@@ -70,4 +70,49 @@ test('the full read reuses threads the early upload already fetched', async () =
   assert.ok(threads.some((t) => t.number === 1), 'the rest is still read');
   assert.ok(!fetched.some((u) => /\/(issues|pulls)\/2\/comments/.test(u)), 'no comment request for #2');
   assert.ok(fetched.some((u) => /\/(issues|pulls)\/1\/comments/.test(u)));
+});
+
+// The early read and the full read share one cache, so a thread the early read
+// is still fetching is waited on, not fetched again — and one with no
+// discussion is remembered too, which a map of finished threads cannot say.
+test('the early and full reads share every GitHub request, even ones in flight', async () => {
+  const fetched: string[] = [];
+  const fake = (async (u: string) => {
+    fetched.push(u);
+    await new Promise((r) => setTimeout(r, 5));
+    if (u.includes('/pulls?state=closed')) {
+      return json(/&page=1$/.test(u) ? Array.from({ length: 40 }, (_, i) => ({ number: 40 - i, title: `pr ${40 - i}` })) : []);
+    }
+    // Odd pull requests have no discussion at all.
+    const n = Number(/\/(\d+)\/comments/.exec(u)?.[1]);
+    return json(n % 2 ? [] : [{ body: `on #${n}`, user: { type: 'User' } }]);
+  }) as never;
+
+  const cache = newThreadReadCache();
+  const [early, full] = await Promise.all([
+    readThreads('chalk', 'chalk', 'tok', fake, 'https://api.test', 30, undefined, cache),
+    readThreads('chalk', 'chalk', 'tok', fake, 'https://api.test', 200, undefined, cache),
+  ]);
+  assert.equal(early.length, 15);
+  assert.equal(full.length, 20);
+  const perThread = fetched.filter((u) => /\/issues\/\d+\/comments/.test(u));
+  assert.equal(perThread.length, 40, 'each pull request asked about once, however many reads wanted it');
+  assert.equal(fetched.filter((u) => u.includes('/pulls?state=closed') && /&page=1$/.test(u)).length, 1, 'the first page of the list is read once');
+});
+
+test('comment reads run in a pool, not in batches that wait for their slowest', async () => {
+  let inFlight = 0;
+  let peak = 0;
+  const fake = (async (u: string) => {
+    if (u.includes('/pulls?state=closed')) {
+      return json(/&page=1$/.test(u) ? Array.from({ length: 60 }, (_, i) => ({ number: i + 1 })) : []);
+    }
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise((r) => setTimeout(r, 2));
+    inFlight--;
+    return json([]);
+  }) as never;
+  await readThreads('chalk', 'chalk', 'tok', fake, 'https://api.test', 60);
+  assert.equal(peak, THREAD_FETCH_CONCURRENCY * 2, 'two comment endpoints per pull request, 24 pull requests at once');
 });

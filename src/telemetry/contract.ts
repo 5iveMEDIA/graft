@@ -109,14 +109,15 @@ export function isTrackedCommand(name: string): name is TrackedCommand {
 /**
  * How a `graft trail push` signup ended.
  *
- * Four categories and nothing else, because the alternative — the error string
+ * Five categories and nothing else, because the alternative — the error string
  * the CLI already prints — carries a repo slug and a URL. `timed_out` and
  * `no_tty` are deliberately apart: one is a person who opened the browser and
  * did not finish, the other is a machine that was never able to open one, and
  * treating them alike would read as a product problem where there is only a
- * remote shell.
+ * remote shell. `stopped` is Ctrl-C while waiting: a person changing their
+ * mind, not a browser that never came back.
  */
-export const BRAIN_SIGNUP_OUTCOMES = ['linked', 'timed_out', 'no_tty', 'bad_callback'] as const;
+export const BRAIN_SIGNUP_OUTCOMES = ['linked', 'timed_out', 'no_tty', 'bad_callback', 'stopped'] as const;
 export type BrainSignupOutcome = (typeof BRAIN_SIGNUP_OUTCOMES)[number];
 
 /** Where a failing build died. Coarse on purpose: enough to route a bug, not

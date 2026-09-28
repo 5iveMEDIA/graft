@@ -64,7 +64,7 @@ test("handoff: the wait gives up rather than hanging forever", async () => {
   const h = await startHandoff();
   const got = await h.wait(150);
   assert.ok("error" in got);
-  assert.match((got as { error: string }).error, /timed out/);
+  assert.match((got as { error: string }).error, /no sign-up after .* · nothing was sent — run graft trail push again/);
 });
 
 test("signup url: carries the repo, the port and the state", () => {
