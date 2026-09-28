@@ -31,10 +31,20 @@ import {
   sameRepo,
   uploadCaps,
 } from "./brain/push.js";
-import { readLink, writeLink } from "./brain/link.js";
+import { apiBaseUrl, clearPendingSignup, readLink, readPendingSignup, writeLink, writePendingSignup } from "./brain/link.js";
 import { withLegacyNames } from "./legacy-args.js";
 import { currentStage, DOING_LABEL, rulesSoFar, watchBuild, type RepoState, type Suggestions } from "./brain/watch.js";
-import { brainUrl, openBrowser, reviewUrl, signupUrl, startHandoff } from "./brain/signup.js";
+import {
+  AGENT_WAIT_MS,
+  brainUrl,
+  newSignupState,
+  openBrowser,
+  PENDING_SIGNUP_TTL_MS,
+  reviewUrl,
+  signupUrl,
+  startHandoff,
+  waitForSignup,
+} from "./brain/signup.js";
 import { runTrailPull } from "./brain/pull.js";
 import { readByWired, readersOf } from "./brain/context-files.js";
 import { startSpinner } from "./util/spinner.js";
@@ -1395,6 +1405,9 @@ const brain = program
  * by then, and every message says so.
  */
 async function signUpForBrain(repo: string, slug: string): Promise<BrainLink | null> {
+  // No terminal means an agent is running this, and a loopback listener cannot
+  // outlive the command it is waiting in: see signUpWithoutTerminal.
+  if (!process.stderr.isTTY) return signUpWithoutTerminal(repo, slug);
   const handoff = await startHandoff();
   const url = signupUrl({ repo: slug, port: handoff.port, state: handoff.state });
   const startedAt = Date.now();
@@ -1403,26 +1416,13 @@ async function signUpForBrain(repo: string, slug: string): Promise<BrainLink | n
   // the outcome is the one thing a terminal handoff can lose: a user who reads
   // the URL and walks away kills the process, and only an event already on disk
   // survives that. This is the denominator; `brain_signup_settled` is not.
-  track("brain_signup_opened", {}, { repo });
+  track("brain_signup_opened", { mode: "terminal" }, { repo });
 
   // Printed before the browser opens, and printed whether or not it opens: on a
   // remote shell nothing can open, and on a desktop the window sometimes lands
   // behind the terminal. The URL is the thing that always works.
-  // "Opening your browser" only where one is about to open.
-  console.error(`· ${slug} has no trail yet — ${process.stderr.isTTY ? "opening your browser to make one" : "make one at"}:`);
+  console.error(`· ${slug} has no trail yet — opening your browser to make one:`);
   console.error(`  ${url}`);
-
-  // A non-interactive shell has nobody to click anything, so waiting five
-  // minutes for a browser that will never come is worse than saying so now.
-  if (!process.stderr.isTTY) {
-    console.error("· not a terminal — open the link above, then run graft trail connect <trailId>:<token> here");
-    // Its own outcome, not a timeout: nothing here could have opened a browser,
-    // so folding the two together would read as people abandoning signup when
-    // it is only a remote shell doing what it has to.
-    track("brain_signup_settled", { outcome: "no_tty", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
-    handoff.close();
-    return null;
-  }
 
   openBrowser(url);
   const spinner = startSpinner("waiting for you to finish signing up · Ctrl-C to stop");
@@ -1440,20 +1440,80 @@ async function signUpForBrain(repo: string, slug: string): Promise<BrainLink | n
   if (got === "stopped") {
     handoff.close();
     console.error("· stopped — nothing was sent; run graft trail push again when you're ready");
-    track("brain_signup_settled", { outcome: "stopped", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
+    track("brain_signup_settled", { outcome: "stopped", mode: "terminal", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
     process.exitCode = 130;
     return null;
   }
   if ("error" in got) {
     console.error(`✗ ${got.error}`);
     // The category, never the sentence: `got.error` names the repo and the link.
-    track("brain_signup_settled", { outcome: got.reason, duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
+    track("brain_signup_settled", { outcome: got.reason, mode: "terminal", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
     return null;
   }
   writeLink(repo, got.link);
   console.error(`✓ trail connected · ${slug} — your browser shows it building`);
-  track("brain_signup_settled", { outcome: "linked", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
+  track("brain_signup_settled", { outcome: "linked", mode: "terminal", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
   return got.link;
+}
+
+/**
+ * The same sign-up when an agent runs the push, in two runs of one command.
+ *
+ * An agent shows the person nothing until a command exits, so the first run
+ * opens the sign-up page, saves the state in its link and exits at once, with
+ * a line telling the agent what to do next. The run after that finds the saved
+ * state and asks Trail for the trail it made, for up to AGENT_WAIT_MS, then
+ * carries on with the push. Still not signed up by then, it says so and the
+ * agent runs it again. Nothing about the repository is read or sent until the
+ * trail is linked.
+ */
+async function signUpWithoutTerminal(repo: string, slug: string): Promise<BrainLink | null> {
+  const startedAt = Date.now();
+  const settled = (outcome: string) =>
+    track("brain_signup_settled", { outcome, mode: "agent", duration_bucket: durationBucket(Date.now() - startedAt) }, { repo });
+  const pending = readPendingSignup(repo, slug, PENDING_SIGNUP_TTL_MS);
+
+  if (!pending) {
+    const state = newSignupState();
+    writePendingSignup(repo, { state, repo: slug, createdAt: Date.now() });
+    const url = signupUrl({ repo: slug, state });
+    track("brain_signup_opened", { mode: "agent" }, { repo });
+    openBrowser(url);
+    console.error(`· ${slug} has no trail yet — opened Trail's sign-up page in the browser:`);
+    console.error(`  ${url}`);
+    console.error("· nothing has been read or sent yet.");
+    console.error(
+      "· next: ask the user to sign up in the tab that just opened (or at the link above), then run `graft trail push` again straight away — it waits for the sign-up to finish and carries on with the push. Don't wait for them to reply first.",
+    );
+    settled("agent_link_opened");
+    process.exitCode = 1;
+    return null;
+  }
+
+  const url = signupUrl({ repo: slug, state: pending.state });
+  console.error(`· waiting up to ${Math.round(AGENT_WAIT_MS / 1000)} s for the sign-up for ${slug} to finish:`);
+  console.error(`  ${url}`);
+  const got = await waitForSignup(pending.state, apiBaseUrl());
+
+  if ("link" in got) {
+    clearPendingSignup(repo);
+    writeLink(repo, got.link);
+    console.error(`✓ trail connected · ${slug}`);
+    settled("linked");
+    return got.link;
+  }
+  if ("pending" in got) {
+    console.error("· not signed up yet — nothing has been read or sent.");
+    console.error("· next: run `graft trail push` again to keep waiting. The link above stays valid for about 15 minutes.");
+    settled("still_waiting");
+    process.exitCode = 1;
+    return null;
+  }
+  clearPendingSignup(repo);
+  console.error(`✗ ${got.error}`);
+  settled(got.reason);
+  process.exitCode = 1;
+  return null;
 }
 
 brain

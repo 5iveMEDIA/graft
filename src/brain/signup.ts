@@ -210,16 +210,106 @@ export function reviewUrl(brainId: string, baseUrl?: string): string {
   return `${webBaseUrl(baseUrl)}/brain/${encodeURIComponent(brainId)}/context-files`;
 }
 
-/** Where to send the browser for a repo's brain. */
-export function signupUrl(opts: { repo: string; port: number; state: string; baseUrl?: string }): string {
+/** Where to send the browser for a repo's brain.
+ *
+ * No port when an agent runs the push: nothing stays listening on loopback, so
+ * Trail keeps the trail it made under `state` and graft asks for it by that. */
+export function signupUrl(opts: { repo: string; port?: number; state: string; baseUrl?: string }): string {
   const base = webBaseUrl(opts.baseUrl);
-  const q = new URLSearchParams({
-    step: "repo",
-    graft_repo: opts.repo,
-    graft_port: String(opts.port),
-    graft_state: opts.state,
-  });
+  const q = new URLSearchParams({ step: "repo", graft_repo: opts.repo });
+  if (opts.port !== undefined) q.set("graft_port", String(opts.port));
+  q.set("graft_state", opts.state);
   return `${base}/get-started?${q.toString()}`;
+}
+
+/*
+ * Signing up when an agent runs the push.
+ *
+ * Claude Code, Cursor and the rest run `graft trail push` with no terminal, and
+ * show the person nothing until the command exits. A loopback listener cannot
+ * work there: the link would sit unseen inside a running command, and anything
+ * the browser is sent back to is gone by the time the person finishes signing
+ * up. So the push runs in two short steps instead. The first opens the sign-up
+ * page, saves the state it put in the link, and exits at once so the agent can
+ * tell the person what to do. The next asks Trail every couple of seconds,
+ * by that state, whether the sign-up has finished, and carries on with the push
+ * when it has.
+ */
+
+/** A fresh state for a sign-up link: 24 random bytes, which is what Trail
+ * accepts and what makes the link impossible to guess. */
+export function newSignupState(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+/** How long one agent-run push waits for the sign-up. Under the two minutes an
+ * agent gives a command by default, so the wait ends with a message it can read
+ * rather than a killed process. */
+export const AGENT_WAIT_MS = 90 * 1000;
+
+/** How often it asks. */
+export const AGENT_POLL_MS = 2000;
+
+/** How long a saved state is worth asking about: a minute under the fifteen
+ * Trail keeps an unclaimed sign-up, so graft never waits on one Trail dropped. */
+export const PENDING_SIGNUP_TTL_MS = 14 * 60 * 1000;
+
+/** Why asking stopped short of a link. */
+export type ClaimFailure = "expired" | "unsupported";
+export type ClaimResult = { link: BrainLink } | { pending: true } | { error: string; reason: ClaimFailure };
+
+/**
+ * Ask Trail once whether the sign-up for `state` has finished.
+ *
+ * A network error or a server error counts as "not yet": one bad request in a
+ * ninety-second wait is not a reason to give up on it.
+ */
+export async function claimSignup(state: string, apiBase: string, fetchImpl: typeof fetch = fetch): Promise<ClaimResult> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${apiBase}/api/public/graft-handoffs/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ state }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { pending: true };
+  }
+  if (res.status === 200) {
+    const body = (await res.json().catch(() => ({}))) as { brain_id?: string; token?: string };
+    if (body.brain_id && body.token) return { link: { brainId: body.brain_id, token: body.token } };
+    return { pending: true };
+  }
+  await res.body?.cancel().catch(() => undefined);
+  if (res.status === 410) {
+    return { error: "that sign-up link was already used or has expired · run graft trail push again for a new one", reason: "expired" };
+  }
+  // An older Trail, without the route. Waiting on it would never end.
+  if (res.status === 404 || res.status === 405) {
+    return {
+      error: "this Trail can't hand a sign-up to an agent yet · run graft trail push in a terminal, or graft trail connect <trailId>:<token>",
+      reason: "unsupported",
+    };
+  }
+  return { pending: true };
+}
+
+/** Ask until the sign-up finishes, Trail says it never will, or `timeoutMs`
+ * passes — which comes back as `{ pending: true }`. */
+export async function waitForSignup(
+  state: string,
+  apiBase: string,
+  opts: { timeoutMs?: number; intervalMs?: number; fetchImpl?: typeof fetch } = {},
+): Promise<ClaimResult> {
+  const deadline = Date.now() + (opts.timeoutMs ?? AGENT_WAIT_MS);
+  const interval = opts.intervalMs ?? AGENT_POLL_MS;
+  for (;;) {
+    const got = await claimSignup(state, apiBase, opts.fetchImpl);
+    if (!("pending" in got)) return got;
+    if (Date.now() + interval > deadline) return got;
+    await new Promise((r) => setTimeout(r, interval));
+  }
 }
 
 /** Open the user's browser, best effort. A machine with no opener is not an

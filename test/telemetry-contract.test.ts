@@ -197,10 +197,11 @@ test('brain signup: the outcome is a category, never the sentence the user saw',
   assert.equal(ev?.properties.error, undefined);
 });
 
-test('brain signup: opened carries no properties of its own', () => {
+test('brain signup: opened carries only whether an agent ran it', () => {
   const home = sandbox('tel-brain-signup-opened');
-  const ev = track('brain_signup_opened', { repo: 'acme/app', port: '51234' }, { home, env: OPEN });
+  const ev = track('brain_signup_opened', { mode: 'agent', repo: 'acme/app', port: '51234' }, { home, env: OPEN });
   assert.ok(ev);
+  assert.equal(ev.properties.mode, 'agent');
   assert.equal(ev.properties.repo, undefined);
   assert.equal(ev.properties.port, undefined);
 });

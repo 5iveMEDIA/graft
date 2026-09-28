@@ -107,6 +107,10 @@ export interface BuildConfig {
    * `~/.graft/`, because a brain belongs to one repository and two checkouts on
    * one machine must not share one. `undefined` clears it. */
   brain?: { brainId: string; token: string; baseUrl?: string };
+  /** A sign-up an agent-run `graft trail push` opened and has not collected
+   * yet: the state in its link, and which repository it was for. Cleared once
+   * collected. `undefined` clears it. */
+  pendingSignup?: { state: string; repo: string; createdAt: number };
 }
 
 /** Local, Git-ignored repository configuration. Kept outside generated

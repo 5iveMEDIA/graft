@@ -55,10 +55,10 @@ export const EVENTS: Record<string, ReadonlySet<string>> = {
    *  make one. Queued the moment the link is printed, so a signup somebody
    *  walked away from is still counted — the settle below never fires for those,
    *  and abandonment is exactly the thing a terminal handoff loses silently. */
-  brain_signup_opened: new Set<string>(),
+  brain_signup_opened: new Set<string>(['mode']),
   /** That handoff reaching an end. `outcome` is a closed set, so the reason a
    *  signup failed travels as a category and never as the error's own words. */
-  brain_signup_settled: new Set<string>(['outcome', 'duration_bucket']),
+  brain_signup_settled: new Set<string>(['outcome', 'mode', 'duration_bucket']),
   /** One closed agent session, summarised. `graft_reads` vs `source_reads` is
    *  the single number that says whether an agent prefers graft to grep; the two
    *  `*_turns` buckets are the follow-up question — of the turns that used graft,

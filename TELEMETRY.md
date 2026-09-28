@@ -46,8 +46,8 @@ The events:
 | `build_completed` | `files_bucket`, `langs`, `mode` (`fast`/`deep`), `duration_bucket`, `incremental` | A build succeeds |
 | `build_failed` | `stage`, `code` — both fixed enums | A build throws |
 | `query` | `command`, `surface` (`cli`/`mcp`/`hook`), `hit` (`ask` only) | Any query command |
-| `brain_signup_opened` | — | `graft trail push` on a repo with no brain opens your browser to make one |
-| `brain_signup_settled` | `outcome` (`linked`/`timed_out`/`no_tty`/`bad_callback`/`stopped`), `duration_bucket` | That handoff ends, one way or the other |
+| `brain_signup_opened` | `mode` (`terminal`/`agent`) | `graft trail push` on a repo with no brain opens your browser to make one |
+| `brain_signup_settled` | `outcome` (`linked`/`timed_out`/`bad_callback`/`stopped`, and for an agent-run push `agent_link_opened`/`still_waiting`/`expired`/`unsupported`), `mode` (`terminal`/`agent`), `duration_bucket` | That handoff ends, one way or the other — for an agent-run push, each of its runs |
 | `session_summary` | `graft_reads_bucket`, `source_reads_bucket`, `saved_tokens_bucket`, `graft_turns_bucket`, `reported_turns_bucket` | Once, after an agent session ends |
 
 Two rules govern every value above, and both are enforced in code rather than by
