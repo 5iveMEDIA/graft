@@ -37,6 +37,7 @@ import {
   readTestNames,
 } from "../app/sources.js";
 import type { GraphV1 } from "../graph/types.js";
+import { readStamp, wiredHostIds } from "../upkeep.js";
 import { baseUrlFor, type BrainLink } from "./link.js";
 import { postDigestOnce, uploadDigest, type UploadCaps, type UploadOptions } from "./upload.js";
 
@@ -272,8 +273,23 @@ export async function buildEarlyDigest(
     symbols: [],
     sources: budgetSources(readAgentInstructions(root)),
     autoApprove: true,
+    agents: pickedAgents(root),
   });
   return { digest, threads };
+}
+
+/**
+ * The agents this repo is wired for — what `graft init` recorded plus what is on
+ * disk, the same set `graft trail pull` filters by — so Trail can show only the
+ * context files those agents read. Empty before the first init; Trail then
+ * shows every kind.
+ */
+export function pickedAgents(root: string): string[] {
+  try {
+    return [...new Set([...(readStamp(root)?.hosts ?? []), ...wiredHostIds(root)])];
+  } catch {
+    return [];
+  }
 }
 
 /** Send the early upload. Best-effort: false on any failure, and the full
@@ -356,6 +372,7 @@ export async function buildLocalDigest(
     symbols,
     sources,
     autoApprove: opts.autoApprove ?? true,
+    agents: pickedAgents(root),
   });
   return { digest, warning };
 }

@@ -64,6 +64,10 @@ export interface RepoDigest {
    * rather than a field per kind, so adding a source is adding an entry. */
   sources: HistorySource[];
   auto_approve: boolean;
+  /** The agents `graft init` wired this repo for (claude, cursor, agents, …).
+   * Trail shows only the context files those agents read. Absent or empty
+   * means "not known", and Trail then shows every kind. */
+  agents?: string[];
 }
 
 /** Field separators inside one `git log` record. Chosen for being bytes no
@@ -363,6 +367,7 @@ export function buildDigest(input: {
   symbols: HistorySymbol[];
   sources: HistorySource[];
   autoApprove: boolean;
+  agents?: string[];
 }): RepoDigest {
   const byPath = new Map<string, string[]>();
   for (const s of input.symbols) {
@@ -397,6 +402,7 @@ export function buildDigest(input: {
     symbols: input.symbols,
     sources: input.sources,
     auto_approve: input.autoApprove,
+    ...(input.agents?.length ? { agents: input.agents } : {}),
   };
 }
 

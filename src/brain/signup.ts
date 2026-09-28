@@ -202,9 +202,12 @@ export function brainUrl(brainId: string, baseUrl?: string): string {
   return `${webBaseUrl(baseUrl)}/get-started?step=build&brain=${encodeURIComponent(brainId)}`;
 }
 
-/** Where a trail's suggested context-file changes are reviewed and accepted. */
+/** Where a trail's suggested context-file changes are reviewed and accepted:
+ * the Context files overview, which lists every file the repo's agents read
+ * (CLAUDE.md, AGENTS.md, Cursor rules, folder files, skills) with what waits
+ * on each. Needs a Trail that has the page (NanoNets/assign#2957). */
 export function reviewUrl(brainId: string, baseUrl?: string): string {
-  return `${webBaseUrl(baseUrl)}/brain/${encodeURIComponent(brainId)}/claude-md`;
+  return `${webBaseUrl(baseUrl)}/brain/${encodeURIComponent(brainId)}/context-files`;
 }
 
 /** Where to send the browser for a repo's brain. */
