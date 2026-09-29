@@ -52,6 +52,21 @@ test('the suggestion counts are read whether Trail sends numbers or lists', () =
   assert.equal(parseRepoBody({ repo: { status: 'ingesting' } })?.suggestions, undefined, 'an older Trail sends none');
 });
 
+test('the polled GET carries the context-file counts in context_files_progress', () => {
+  // On GET /repo, `context_files` is the flag that says the routes exist.
+  const polled = parseRepoBody({
+    repo: { status: 'completed' },
+    claude_md: { status: 'analyzing', changes: 3 },
+    context_files: true,
+    context_files_progress: { changes: 2, files: [{ kind: 'skill', path: '.claude/skills/a/SKILL.md', changes: 2 }] },
+  });
+  assert.deepEqual(polled?.suggestions, {
+    claudeMd: 3,
+    contextFiles: 2,
+    files: [{ kind: 'skill', path: '.claude/skills/a/SKILL.md', changes: 2 }],
+  });
+});
+
 // --- the stream ---------------------------------------------------------------
 
 /** A text/event-stream response that sends each part in turn, then ends (or not). */

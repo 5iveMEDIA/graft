@@ -217,11 +217,12 @@ test('trail pull: counts travel as buckets, and a path never rides along', () =>
   const home = sandbox('tel-trail-pulled');
   const ev = track(
     'trail_pulled',
-    { outcome: 'written', kinds: 'agents_md,claude_md', files_bucket: '1-4', changes_bucket: '5-19', skipped_bucket: '0', path: 'web/CLAUDE.md' },
+    { outcome: 'written', kinds: 'agents_md,claude_md', files_bucket: '1-4', changes_bucket: '5-19', skipped_bucket: '0', suggested_bucket: '20-49', path: 'web/CLAUDE.md' },
     { home, env: OPEN },
   );
   assert.equal(ev?.properties.outcome, 'written');
   assert.equal(ev?.properties.kinds, 'agents_md,claude_md');
   assert.equal(ev?.properties.changes_bucket, '5-19');
+  assert.equal(ev?.properties.suggested_bucket, '20-49');
   assert.equal(ev?.properties.path, undefined);
 });

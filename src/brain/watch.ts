@@ -177,7 +177,10 @@ interface RepoBody {
   // the finished row, exactly as it did before.
   build?: { found_so_far?: number; filed_so_far?: number } | null;
   claude_md?: { status?: string; quick_ready?: boolean; full_ready?: boolean; changes?: unknown } | null;
-  context_files?: { files?: unknown; changes?: unknown } | null;
+  // An object on every SSE frame. On the polled GET it is the `true` that says
+  // the routes exist, and the counts ride in `context_files_progress` instead.
+  context_files?: { files?: unknown; changes?: unknown } | boolean | null;
+  context_files_progress?: { files?: unknown; changes?: unknown } | null;
 }
 
 /**
@@ -196,15 +199,16 @@ export function parseRepoBody(body: unknown): RepoState | null {
     filedSoFar: num(b.build?.filed_so_far),
     foundSoFar: num(b.build?.found_so_far),
   };
-  if (b.claude_md || b.context_files) {
-    const files = Array.isArray(b.context_files?.files)
-      ? (b.context_files!.files as Array<{ kind?: unknown; path?: unknown; changes?: unknown }>)
+  const cf = b.context_files && typeof b.context_files === "object" ? b.context_files : b.context_files_progress;
+  if (b.claude_md || cf) {
+    const files = Array.isArray(cf?.files)
+      ? (cf!.files as Array<{ kind?: unknown; path?: unknown; changes?: unknown }>)
           .filter((f) => f && typeof f === "object")
           .map((f) => ({ kind: String(f.kind ?? ""), path: String(f.path ?? ""), changes: countOf(f.changes) }))
       : undefined;
     state.suggestions = {
       claudeMd: countOf(b.claude_md?.changes),
-      contextFiles: b.context_files?.changes !== undefined ? countOf(b.context_files.changes) : (files ?? []).reduce((n, f) => n + f.changes, 0),
+      contextFiles: cf?.changes !== undefined ? countOf(cf.changes) : (files ?? []).reduce((n, f) => n + f.changes, 0),
       ...(files ? { files } : {}),
     };
   }

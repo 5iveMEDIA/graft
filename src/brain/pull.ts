@@ -19,12 +19,14 @@ import {
   markContextFilesApplied,
   planContextFile,
   readByWired,
+  readersOf,
   writePlannedFile,
   type ContextFile,
   type FilePlan,
 } from "./context-files.js";
 import type { BrainLink } from "./link.js";
 import { reviewUrl } from "./signup.js";
+import { fetchRepoState, type Suggestions } from "./watch.js";
 import { CONTEXT_FILE_KINDS, countBucket, type TrailPullOutcome } from "../telemetry/contract.js";
 import { track } from "../telemetry/track.js";
 
@@ -55,6 +57,71 @@ export function rulesLine(repo: string, res: ConnectResult): string | null {
   return `✓ ${rules} refreshed in ${where}`;
 }
 
+/** `a, b and c`. */
+function joinAnd(items: string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * Trail's suggestions, cut to the files the wired agents read: how many, and
+ * whose files they are (`the files claude and cursor read`).
+ *
+ * Every suggestion Trail has made, whatever became of it — the counts it sends
+ * do not say which are still waiting for review and which were dismissed.
+ */
+export function suggestedFor(s: Suggestions | undefined, wired: string[]): { count: number; whose: string } {
+  if (!s) return { count: 0, whose: "" };
+  let count = 0;
+  const kinds = new Set<string>();
+  if (s.claudeMd > 0 && readByWired("claude_md", wired)) {
+    count += s.claudeMd;
+    kinds.add("claude_md");
+  }
+  if (s.files) {
+    for (const f of s.files) {
+      if (f.changes <= 0 || !readByWired(f.kind, wired)) continue;
+      count += f.changes;
+      kinds.add(f.kind);
+    }
+  } else if (s.contextFiles > 0) {
+    // No per-file list from this Trail, so no way to cut it to the wired agents'
+    // files: the count is Trail's total.
+    count += s.contextFiles;
+    for (const k of ["agents_md", "folder_claude_md", "cursor_rule", "skill"]) kinds.add(k);
+  }
+  const readers = wired.length
+    ? wired.filter((w) => [...kinds].some((k) => readersOf(k, [w]).length > 0))
+    : [];
+  return { count, whose: readers.length ? `the files ${joinAnd(readers)} read` : "this repo's context files" };
+}
+
+/**
+ * The suggestions line after a build:
+ * `● 18 suggestions for the files claude, agents and cursor read`. Null when
+ * there are none to mention.
+ */
+export function suggestionsLine(s: Suggestions | undefined, wired: string[], again: boolean): string | null {
+  const { count, whose } = suggestedFor(s, wired);
+  if (count === 0) return null;
+  return `● ${count.toLocaleString("en-US")} ${again ? "new " : ""}suggestion${count === 1 ? "" : "s"} for ${whose}`;
+}
+
+/**
+ * What a pull says about the suggestions it did not write:
+ * `● 20 suggested so far for the files claude read, 2 of them accepted`.
+ *
+ * This is what lets an agent watching the trail say "there are suggestions
+ * waiting for you" before anything has been accepted. "So far", because the
+ * build keeps adding them after the push returns. Null when Trail sent no
+ * counts, or counts that cannot hold what was accepted.
+ */
+export function suggestedLine(suggested: { count: number; whose: string }, accepted: number): string | null {
+  if (suggested.count === 0 || suggested.count < accepted) return null;
+  const taken = accepted === 0 ? "none accepted yet" : `${accepted.toLocaleString("en-US")} of them accepted`;
+  return `● ${suggested.count.toLocaleString("en-US")} suggested so far for ${suggested.whose}, ${taken}`;
+}
+
 /** Everything the pull will write, file by file, with where each change came from. */
 interface Planned {
   plan: FilePlan;
@@ -66,7 +133,7 @@ interface Planned {
  * The `trail_pulled` event for one pull. Only the outcome, which kinds of file
  * were written, and bucketed counts leave the machine — see TELEMETRY.md.
  */
-function trackPull(repo: string, home: string | undefined, outcome: TrailPullOutcome, planned: Planned[] = []): void {
+function trackPull(repo: string, home: string | undefined, outcome: TrailPullOutcome, planned: Planned[] = [], suggested = 0): void {
   const wrote = planned.filter((p) => p.plan.status && p.plan.written.length > 0);
   const kinds = [...new Set(wrote.map((p) => p.kind))]
     .filter((k) => (CONTEXT_FILE_KINDS as readonly string[]).includes(k))
@@ -80,6 +147,7 @@ function trackPull(repo: string, home: string | undefined, outcome: TrailPullOut
       files_bucket: countBucket(wrote.length),
       changes_bucket: countBucket(wrote.reduce((n, p) => n + p.plan.written.length, 0)),
       skipped_bucket: countBucket(planned.reduce((n, p) => n + p.plan.skipped.length, 0)),
+      suggested_bucket: countBucket(suggested),
     },
     { repo, home },
   );
@@ -92,6 +160,9 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
   const write = opts.write ?? ((l: string) => console.error(l));
   const fetchImpl = opts.fetchImpl ?? fetch;
   let code = 0;
+  // Read beside everything else: it only adds a line, and a Trail that cannot
+  // answer it costs the pull nothing.
+  const repoState = fetchRepoState(link, fetchImpl);
 
   // 1. The rules. Skipped on a dry run, which writes nothing at all.
   if (!opts.dryRun) {
@@ -135,12 +206,20 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
     }
   }
 
+  const suggested = suggestedFor((await repoState)?.suggestions, opts.wired);
+  const waiting = suggestedLine(suggested, accepted);
+
   if (accepted === 0) {
     if (code === 0) {
-      write("· nothing accepted in Trail yet — review:");
-      write(`  ${reviewUrl(link.brainId)}`);
+      if (waiting) {
+        write(waiting);
+        write(`  review: ${reviewUrl(link.brainId)}`);
+      } else {
+        write("· nothing accepted in Trail yet — review:");
+        write(`  ${reviewUrl(link.brainId)}`);
+      }
     }
-    trackPull(repo, opts.home, code === 0 ? "nothing_accepted" : "error");
+    trackPull(repo, opts.home, code === 0 ? "nothing_accepted" : "error", [], suggested.count);
     return code;
   }
 
@@ -165,9 +244,14 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
     }
   }
 
+  if (waiting) {
+    write(waiting);
+    write(`  review: ${reviewUrl(link.brainId)}`);
+  }
+
   if (opts.dryRun) {
     write("· dry run — nothing written, and Trail was not told");
-    trackPull(repo, opts.home, "dry_run", planned);
+    trackPull(repo, opts.home, "dry_run", planned, suggested.count);
     return code;
   }
 
@@ -199,6 +283,6 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
       : anySkipped
         ? "skipped"
         : "error";
-  trackPull(repo, opts.home, outcome, planned);
+  trackPull(repo, opts.home, outcome, planned, suggested.count);
   return code;
 }

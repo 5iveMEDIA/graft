@@ -33,7 +33,7 @@ import {
 } from "./brain/push.js";
 import { apiBaseUrl, clearPendingSignup, readLink, readPendingSignup, writeLink, writePendingSignup } from "./brain/link.js";
 import { withLegacyNames } from "./legacy-args.js";
-import { currentStage, DOING_LABEL, rulesSoFar, watchBuild, type RepoState, type Suggestions } from "./brain/watch.js";
+import { currentStage, DOING_LABEL, rulesSoFar, watchBuild, type RepoState } from "./brain/watch.js";
 import {
   AGENT_WAIT_MS,
   brainUrl,
@@ -45,8 +45,7 @@ import {
   startHandoff,
   waitForSignup,
 } from "./brain/signup.js";
-import { runTrailPull } from "./brain/pull.js";
-import { readByWired, readersOf } from "./brain/context-files.js";
+import { runTrailPull, suggestionsLine } from "./brain/pull.js";
 import { startSpinner } from "./util/spinner.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
@@ -1568,39 +1567,6 @@ async function runTrailPullCommand(dir: string, opts: { dryRun?: boolean }): Pro
   const wired = [...new Set([...(stamp?.hosts ?? []), ...wiredHostIds(repo)])];
   const code = await runTrailPull(repo, link, { home: homedir(), wired, dryRun: opts.dryRun });
   if (code !== 0) process.exitCode = code;
-}
-
-/**
- * The suggestions line after a build, cut to the files the wired agents read:
- * `● 18 suggestions for the files claude, agents and cursor read`. Null when
- * there are none to mention.
- */
-function suggestionsLine(s: Suggestions | undefined, wired: string[], again: boolean): string | null {
-  if (!s) return null;
-  let count = 0;
-  const kinds = new Set<string>();
-  if (s.claudeMd > 0 && readByWired("claude_md", wired)) {
-    count += s.claudeMd;
-    kinds.add("claude_md");
-  }
-  if (s.files) {
-    for (const f of s.files) {
-      if (f.changes <= 0 || !readByWired(f.kind, wired)) continue;
-      count += f.changes;
-      kinds.add(f.kind);
-    }
-  } else if (s.contextFiles > 0) {
-    // No per-file list from this Trail, so no way to cut it to the wired agents'
-    // files: the count is Trail's total.
-    count += s.contextFiles;
-    for (const k of ["agents_md", "folder_claude_md", "cursor_rule", "skill"]) kinds.add(k);
-  }
-  if (count === 0) return null;
-  const readers = wired.length
-    ? wired.filter((w) => [...kinds].some((k) => readersOf(k, [w]).length > 0))
-    : [];
-  const whose = readers.length ? `the files ${joinAnd(readers)} read` : "this repo's context files";
-  return `● ${count.toLocaleString("en-US")} ${again ? "new " : ""}suggestion${count === 1 ? "" : "s"} for ${whose}`;
 }
 
 brain

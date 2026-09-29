@@ -141,14 +141,15 @@ const link = { brainId: 'b1', token: 'gbt_1.x', baseUrl: 'http://trail.test' } a
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-function fakeTrail(files: ContextFile[], opts: { contextFiles?: 'ok' | 'missing' } = {}) {
+function fakeTrail(files: ContextFile[], opts: { contextFiles?: 'ok' | 'missing'; repo?: unknown; claudeMd?: unknown[] } = {}) {
   const applied: Record<string, string[]> = {};
   const f = (async (u: string, init?: RequestInit) => {
     const path = new URL(u).pathname;
     if (path.endsWith('/rules/anchors')) return json({ anchors: [] });
     if (path.endsWith('/claude-md')) {
-      return json({ path: 'CLAUDE.md', head_sha: 'abc', changes: [{ id: 'm1', kind: 'add', heading: 'Money', after_heading: '', text: 'Integer cents.' }] });
+      return json({ path: 'CLAUDE.md', head_sha: 'abc', changes: opts.claudeMd ?? [{ id: 'm1', kind: 'add', heading: 'Money', after_heading: '', text: 'Integer cents.' }] });
     }
+    if (path.endsWith('/repo') && opts.repo) return json(opts.repo);
     if (path.endsWith('/context-files')) {
       return opts.contextFiles === 'missing' ? json({ error: 'not found' }, 404) : json({ head_sha: 'abc', files });
     }
@@ -212,4 +213,49 @@ test('a Trail without context files still pulls CLAUDE.md, silently', async () =
   assert.equal(code, 0);
   assert.match(lines.join('\n'), /✓ wrote 1 accepted change\n  A CLAUDE\.md +\+ Money/);
   assert.doesNotMatch(lines.join('\n'), /✗/);
+});
+
+/** Trail's GET /repo mid-review: 3 CLAUDE.md suggestions, 2 skills, 4 Cursor rules. */
+const REVIEWING = {
+  repo: { status: 'completed', rule_count: 75 },
+  claude_md: { status: 'ready', changes: 3 },
+  context_files: true,
+  context_files_progress: {
+    changes: 6,
+    files: [
+      { kind: 'skill', path: '.claude/skills/a/SKILL.md', changes: 2 },
+      { kind: 'cursor_rule', path: '.cursor/rules/a.mdc', changes: 4 },
+    ],
+  },
+};
+
+test('with nothing accepted, a pull says how many suggestions are waiting for the wired agents', async () => {
+  const root = tmpRepo('ctx-waiting');
+  const { f } = fakeTrail([], { repo: REVIEWING, claudeMd: [] });
+  const lines: string[] = [];
+  const code = await runTrailPull(root, link, { home: root, wired: ['claude'], dryRun: true, fetchImpl: f, write: (l) => lines.push(l) });
+  const out = lines.join('\n');
+  assert.equal(code, 0);
+  assert.match(out, /● 5 suggested so far for the files claude read, none accepted yet\n  review: \S+\/brain\/b1\/context-files/);
+  assert.doesNotMatch(out, /nothing accepted in Trail yet/);
+});
+
+test('a dry run with accepted changes also says how many were suggested, and where to review', async () => {
+  const root = tmpRepo('ctx-waiting-dry');
+  const { f } = fakeTrail([], { repo: REVIEWING });
+  const lines: string[] = [];
+  await runTrailPull(root, link, { home: root, wired: ['claude', 'cursor'], dryRun: true, fetchImpl: f, write: (l) => lines.push(l) });
+  const out = lines.join('\n');
+  assert.match(out, /✓ would write 1 accepted change/);
+  assert.match(out, /● 9 suggested so far for the files claude and cursor read, 1 of them accepted\n  review: /);
+  assert.match(out, /dry run — nothing written/);
+});
+
+test('a Trail that sends no counts leaves the pull as it was', async () => {
+  const root = tmpRepo('ctx-no-counts');
+  const { f } = fakeTrail([], { claudeMd: [] });
+  const lines: string[] = [];
+  await runTrailPull(root, link, { home: root, wired: ['claude'], fetchImpl: f, write: (l) => lines.push(l) });
+  assert.match(lines.join('\n'), /· nothing accepted in Trail yet — review:/);
+  assert.doesNotMatch(lines.join('\n'), /suggested so far/);
 });

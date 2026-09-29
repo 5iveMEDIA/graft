@@ -64,7 +64,7 @@ export const EVENTS: Record<string, ReadonlySet<string>> = {
    *  written (a fixed set, sorted); every count is a bucket. Paths, headings and
    *  the changes' text never travel. The adoption number for Trail's context
    *  files: how many people actually take a suggestion home. */
-  trail_pulled: new Set<string>(['outcome', 'kinds', 'files_bucket', 'changes_bucket', 'skipped_bucket']),
+  trail_pulled: new Set<string>(['outcome', 'kinds', 'files_bucket', 'changes_bucket', 'skipped_bucket', 'suggested_bucket']),
   /** One closed agent session, summarised. `graft_reads` vs `source_reads` is
    *  the single number that says whether an agent prefers graft to grep; the two
    *  `*_turns` buckets are the follow-up question — of the turns that used graft,
