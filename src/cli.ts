@@ -1771,9 +1771,10 @@ brain
   });
 
 // `graft claude-md pull` is `graft trail pull` now: the CLAUDE.md changes are
-// the first half of what that writes. Kept so the old name keeps working.
+// the first half of what that writes. Kept so the old name keeps working, but
+// hidden from --help so people only ever see one pull command.
 const claudeMd = program
-  .command("claude-md")
+  .command("claude-md", { hidden: true })
   .description("The CLAUDE.md changes this repo's trail suggested (now part of graft trail pull)");
 
 claudeMd
