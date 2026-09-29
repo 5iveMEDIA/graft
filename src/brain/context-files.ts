@@ -93,7 +93,7 @@ export function readersOf(kind: string, wired: readonly string[]): string[] {
 export async function fetchContextFiles(
   link: BrainLink,
   fetchImpl: typeof fetch = fetch,
-): Promise<ContextFilesPull | { unsupported: true } | { error: string }> {
+): Promise<ContextFilesPull | { unsupported: true } | { error: string; status?: number }> {
   const url = `${baseUrlFor(link)}/api/public/brains/${encodeURIComponent(link.brainId)}/context-files`;
   try {
     const res = await fetchImpl(url, {
@@ -102,7 +102,7 @@ export async function fetchContextFiles(
     });
     const body = await res.text();
     if (res.status === 404) return { unsupported: true };
-    if (!res.ok) return { error: `Trail refused the pull: ${res.status} ${body.slice(0, 200)}` };
+    if (!res.ok) return { error: `Trail refused the pull: ${res.status} ${body.slice(0, 200)}`, status: res.status };
     const parsed = JSON.parse(body) as Partial<ContextFilesPull>;
     const files = Array.isArray(parsed.files) ? parsed.files : [];
     return {

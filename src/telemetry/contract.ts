@@ -65,6 +65,15 @@ export const EVENTS: Record<string, ReadonlySet<string>> = {
    *  the changes' text never travel. The adoption number for Trail's context
    *  files: how many people actually take a suggestion home. */
   trail_pulled: new Set<string>(['outcome', 'kinds', 'files_bucket', 'changes_bucket', 'skipped_bucket', 'suggested_bucket']),
+  /** `graft trail watch` ending. `reason` is a closed set (TRAIL_WATCH_REASONS);
+   *  the counts it ended on and how long it waited are buckets. Whether the
+   *  watcher that replaced the agent-written polling loop actually ends on
+   *  something worth relaying, or mostly times out. */
+  trail_watch_exit: new Set<string>(['reason', 'suggested_bucket', 'accepted_bucket', 'duration_bucket']),
+  /** The session-start hook's background `graft trail push`: `started`, or
+   *  `skipped` with a `reason` from a closed set (TRAIL_AUTOPUSH_SKIPS). Only for
+   *  a repo with a trail attached — every other repo sends nothing. */
+  trail_autopush: new Set<string>(['outcome', 'reason']),
   /** One closed agent session, summarised. `graft_reads` vs `source_reads` is
    *  the single number that says whether an agent prefers graft to grep; the two
    *  `*_turns` buckets are the follow-up question — of the turns that used graft,
@@ -136,6 +145,12 @@ export type BrainSignupOutcome = (typeof BRAIN_SIGNUP_OUTCOMES)[number];
  */
 export const TRAIL_PULL_OUTCOMES = ['written', 'already_present', 'nothing_accepted', 'skipped', 'error', 'dry_run'] as const;
 export type TrailPullOutcome = (typeof TRAIL_PULL_OUTCOMES)[number];
+
+/** How `graft trail watch` ended — see WatchExitReason in brain/watch-trail.ts. */
+export const TRAIL_WATCH_REASONS = ['suggestions', 'accepted', 'timeout', 'refused', 'no_trail'] as const;
+
+/** Why a background push did not start. `no_trail` is never sent. */
+export const TRAIL_AUTOPUSH_SKIPS = ['disabled', 'no_head', 'head_unchanged', 'throttled', 'spawn_failed'] as const;
 
 /** The context-file kinds `trail_pulled.kinds` may name; anything else is dropped. */
 export const CONTEXT_FILE_KINDS = ['claude_md', 'folder_claude_md', 'agents_md', 'cursor_rule', 'skill'] as const;

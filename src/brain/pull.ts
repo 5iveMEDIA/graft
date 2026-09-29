@@ -26,7 +26,7 @@ import {
 } from "./context-files.js";
 import type { BrainLink } from "./link.js";
 import { reviewUrl } from "./signup.js";
-import { fetchRepoState, type Suggestions } from "./watch.js";
+import { fetchRepoState, type RepoState, type Suggestions } from "./watch.js";
 import { CONTEXT_FILE_KINDS, countBucket, type TrailPullOutcome } from "../telemetry/contract.js";
 import { track } from "../telemetry/track.js";
 
@@ -123,10 +123,76 @@ export function suggestedLine(suggested: { count: number; whose: string }, accep
 }
 
 /** Everything the pull will write, file by file, with where each change came from. */
-interface Planned {
+export interface Planned {
   plan: FilePlan;
   source: "claude-md" | "context-files";
   kind: string;
+}
+
+/** What Trail holds for this checkout right now, planned against the files on disk. */
+export interface Gathered {
+  /** Every file with an accepted change for the wired agents, planned. */
+  planned: Planned[];
+  /** Accepted changes Trail still lists for the wired agents' files, whatever
+   *  the plan makes of them. */
+  accepted: number;
+  /** What Trail has suggested for those files, or null when the counts could
+   *  not be read (a failed request, as opposed to a Trail that sends none). */
+  suggested: { count: number; whose: string } | null;
+  /** Each request that failed, in the order the pull reports them. `status` is
+   *  the HTTP status when Trail answered, absent when it could not be reached —
+   *  the difference between a revoked token and a blip. */
+  errors: Array<{ message: string; status?: number }>;
+}
+
+/**
+ * Read everything Trail has accepted for this repo and plan it against disk,
+ * without writing a byte or telling Trail anything.
+ *
+ * The one read both `graft trail pull` and `graft trail watch` (and the
+ * session-start hook's quick look) are built on, so a watcher that says "3
+ * accepted changes are ready" is counting exactly what the pull will write. The
+ * three requests go out together: the hook gives this three seconds, and three
+ * in a row would spend them.
+ *
+ * `repoState` is for a caller that started the counts request earlier, as the
+ * pull does, so it runs beside the rules refresh rather than after it.
+ */
+export async function gatherPull(
+  repo: string,
+  link: BrainLink,
+  wired: string[],
+  fetchImpl: typeof fetch = fetch,
+  repoState: Promise<RepoState | null> = fetchRepoState(link, fetchImpl),
+): Promise<Gathered> {
+  const [md, ctx, state] = await Promise.all([fetchAcceptedChanges(link, fetchImpl), fetchContextFiles(link, fetchImpl), repoState]);
+  const planned: Planned[] = [];
+  const errors: Gathered["errors"] = [];
+  let accepted = 0;
+
+  // The root CLAUDE.md first, then every other context file: the order the
+  // pull has always listed them in.
+  if ("error" in md) {
+    if (!md.unsupported) errors.push({ message: md.error, ...(md.status ? { status: md.status } : {}) });
+  } else if (md.changes.length > 0) {
+    const file: ContextFile = { kind: kindForPath(md.path || "CLAUDE.md"), path: md.path || "CLAUDE.md", changes: md.changes };
+    if (readByWired(file.kind, wired)) {
+      accepted += file.changes.length;
+      planned.push({ plan: planContextFile(repo, file), source: "claude-md", kind: file.kind });
+    }
+  }
+
+  if ("error" in ctx) {
+    errors.push({ message: ctx.error, ...(ctx.status ? { status: ctx.status } : {}) });
+  } else if (!("unsupported" in ctx)) {
+    for (const file of ctx.files) {
+      if (file.changes.length === 0 || !readByWired(file.kind, wired)) continue;
+      accepted += file.changes.length;
+      planned.push({ plan: planContextFile(repo, file), source: "context-files", kind: file.kind });
+    }
+  }
+
+  return { planned, accepted, suggested: state ? suggestedFor(state.suggestions, wired) : null, errors };
 }
 
 /**
@@ -177,36 +243,13 @@ export async function runTrailPull(repo: string, link: BrainLink, opts: PullOpti
   }
 
   // 2. Accepted changes: the root CLAUDE.md, then every other context file.
-  const planned: Planned[] = [];
-  let accepted = 0;
-
-  const md = await fetchAcceptedChanges(link, fetchImpl);
-  if ("error" in md) {
-    if (!md.unsupported) {
-      write(`✗ ${md.error}`);
-      code = 1;
-    }
-  } else if (md.changes.length > 0) {
-    const file: ContextFile = { kind: kindForPath(md.path || "CLAUDE.md"), path: md.path || "CLAUDE.md", changes: md.changes };
-    if (readByWired(file.kind, opts.wired)) {
-      accepted += file.changes.length;
-      planned.push({ plan: planContextFile(repo, file), source: "claude-md", kind: file.kind });
-    }
-  }
-
-  const ctx = await fetchContextFiles(link, fetchImpl);
-  if ("error" in ctx) {
-    write(`✗ ${ctx.error}`);
+  const { planned, accepted, suggested: counted, errors } = await gatherPull(repo, link, opts.wired, fetchImpl, repoState);
+  for (const e of errors) {
+    write(`✗ ${e.message}`);
     code = 1;
-  } else if (!("unsupported" in ctx)) {
-    for (const file of ctx.files) {
-      if (file.changes.length === 0 || !readByWired(file.kind, opts.wired)) continue;
-      accepted += file.changes.length;
-      planned.push({ plan: planContextFile(repo, file), source: "context-files", kind: file.kind });
-    }
   }
 
-  const suggested = suggestedFor((await repoState)?.suggestions, opts.wired);
+  const suggested = counted ?? { count: 0, whose: "" };
   const waiting = suggestedLine(suggested, accepted);
 
   if (accepted === 0) {

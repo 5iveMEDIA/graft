@@ -329,6 +329,7 @@ Where a CLI agent supports user-level `hooks.json`, `init` also installs Graft's
 - **a live statusline** — graph size, % enriched, and a `⚠ N stale` warning when the code has moved ahead of the graph
 - **auto-sync** — every graft query brings the graph up to date first, so an answer always describes the code as it is right now, uncommitted edits included. A query refreshes only what it reads; the markdown under `graft/` is refreshed by the background rebuild at the end of a turn that touched code. Both are structural and `$0` — auto-sync never calls the LLM on its own
 - **context on tap** — each prompt pulls the matching nodes into the session; editing a file surfaces what depends on it ("blast radius"); new sessions start with the repo map
+- **a trail that keeps up** — in a repo with a Trail attached, a new session is told when accepted changes are waiting for `graft trail pull` or suggestions are waiting for review (one check, capped at 3 s). At most once a day, and only when HEAD has moved since the last push, it also starts a background `graft trail push --no-watch` so the suggestions follow the history (its output goes to `.graft/trail-push.log`). Turn that off with `GRAFT_TRAIL_AUTOPUSH=0`, or `"trailAutoPush": false` in `.graft/config.json`
 
 <p align="center">
   <img src="assets/graft-hooks-demo.gif" alt="How Claude Code hooks wire graft in: install, graft init, then the hooks loop (session start, user prompt, post tool use, stop) keeps the graph built, read, and committed automatically" width="820"/>
@@ -388,6 +389,13 @@ graft check --json                   # print the drift report as JSON
 #   --no-refresh                     # answer from the graph exactly as it is on disk
 #   GRAFT_NO_REFRESH=1               # same, for every command
 #   GRAFT_REFRESH=hash               # hash every file instead of trusting size+mtime
+
+graft trail push [dir]               # read this repo's history into its Trail (the first run signs up in the browser)
+graft trail pull [dir]               # write the changes accepted in Trail into CLAUDE.md, AGENTS.md and the other context files
+graft trail pull --dry-run           # what would be written, and how many suggestions are waiting for review
+graft trail watch [dir]              # wait until Trail has suggestions to review or accepted changes to pull, then say so once
+graft trail watch --accepted-only    # keep waiting through suggestions; stop only on accepted changes
+graft trail watch --json             # the same ending, machine-readable (exit 0: something to act on, 2: timed out)
 
 graft viz [dir]                      # see the graph: serves an interactive viewer on localhost
 graft viz --port 5000 --no-open      # pick a port; don't auto-open the browser

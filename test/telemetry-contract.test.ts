@@ -75,10 +75,11 @@ test('every event carries the common properties, and no identifier beyond them',
 
 // Pinned rather than counted, so adding an event is a deliberate edit here and
 // a matching row in TELEMETRY.md, never something that arrives with a feature.
-test('the contract lists exactly the ten documented events', () => {
+test('the contract lists exactly the twelve documented events', () => {
   assert.deepEqual(Object.keys(EVENTS).sort(), [
     'brain_signup_opened', 'brain_signup_settled', 'build_completed', 'build_failed',
-    'first_run', 'init_completed', 'install', 'query', 'session_summary', 'trail_pulled',
+    'first_run', 'init_completed', 'install', 'query', 'session_summary', 'trail_autopush', 'trail_pulled',
+    'trail_watch_exit',
   ]);
 });
 
@@ -225,4 +226,36 @@ test('trail pull: counts travel as buckets, and a path never rides along', () =>
   assert.equal(ev?.properties.changes_bucket, '5-19');
   assert.equal(ev?.properties.suggested_bucket, '20-49');
   assert.equal(ev?.properties.path, undefined);
+});
+
+// --- the trail watcher and the background push ---
+
+test('trail_watch_exit carries buckets and a reason, never the files or the link', () => {
+  const home = sandbox('tel-trail-watch');
+  const ev = track(
+    'trail_watch_exit',
+    {
+      reason: 'accepted',
+      suggested_bucket: countBucket(9),
+      accepted_bucket: countBucket(3),
+      duration_bucket: durationBucket(61_000),
+      files: 'CLAUDE.md (Commands)',
+      review_url: 'https://app.trailhq.com/brain/b1/context-files',
+    },
+    { home, env: OPEN },
+  );
+  assert.equal(ev?.properties.reason, 'accepted');
+  assert.equal(ev?.properties.suggested_bucket, '5-19');
+  assert.equal(ev?.properties.accepted_bucket, '1-4');
+  assert.equal(ev?.properties.duration_bucket, '30s-2m');
+  assert.equal(JSON.stringify(ev).includes('CLAUDE.md'), false);
+  assert.equal(JSON.stringify(ev).includes('trailhq'), false);
+});
+
+test('trail_autopush carries only whether it started and why not', () => {
+  const home = sandbox('tel-trail-autopush');
+  const ev = track('trail_autopush', { outcome: 'skipped', reason: 'throttled', head: 'a'.repeat(40) }, { home, env: OPEN });
+  assert.equal(ev?.properties.outcome, 'skipped');
+  assert.equal(ev?.properties.reason, 'throttled');
+  assert.equal(ev?.properties.head, undefined);
 });

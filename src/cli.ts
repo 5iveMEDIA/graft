@@ -24,6 +24,7 @@ import {
   buildEarlyDigest,
   buildLocalDigest,
   fetchExpectedRepo,
+  pickedAgents,
   pushContext,
   pushDigest,
   pushEarlyDigest,
@@ -46,6 +47,16 @@ import {
   waitForSignup,
 } from "./brain/signup.js";
 import { runTrailPull, suggestionsLine } from "./brain/pull.js";
+import {
+  trackWatchExit,
+  WATCH_DEFAULTS,
+  watchExitCode,
+  watchExitJson,
+  watchExitLines,
+  watchTrail,
+  type WatchTrailResult,
+} from "./brain/watch-trail.js";
+import { AUTOPUSH_CHILD_ENV, recordTrailPush } from "./brain/autopush.js";
 import { startSpinner } from "./util/spinner.js";
 import { contextDirFor } from "./context/node-file.js";
 import { loadGraphCached } from "./graph/load.js";
@@ -1569,6 +1580,78 @@ async function runTrailPullCommand(dir: string, opts: { dryRun?: boolean }): Pro
   if (code !== 0) process.exitCode = code;
 }
 
+/** A positive number of seconds or minutes from an option, or null. */
+function positiveNumber(raw: string): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+brain
+  .command("watch")
+  .description("Wait until Trail has suggestions to review or accepted changes to pull, then say so once")
+  .argument("[dir]", "target repo directory", ".")
+  .option("--interval <seconds>", "how often to check Trail", String(WATCH_DEFAULTS.intervalMs / 1000))
+  .option("--settle <seconds>", "how long the accepted changes must stay the same before they are reported", String(WATCH_DEFAULTS.settleMs / 1000))
+  .option("--timeout <minutes>", "give up after this long (exit code 2)", String(WATCH_DEFAULTS.timeoutMs / 60_000))
+  .option("--accepted-only", "keep waiting while suggestions are only waiting for review; stop on accepted changes")
+  .option("--json", "print the result as JSON")
+  .option("--verbose", "print the counts on every check, to stderr")
+  .addHelpText(
+    "after",
+    [
+      "",
+      "Stops when any of these is true, and prints one block to stdout:",
+      "  - there are suggestions and none accepted (unless --accepted-only)   exit 0",
+      "  - accepted changes have not changed for --settle seconds              exit 0",
+      "  - --timeout minutes have passed                                       exit 2",
+      "A failed check is retried on the next one. No trail attached, or a token Trail refuses: exit 1.",
+    ].join("\n"),
+  )
+  .action(
+    async (
+      dir: string,
+      opts: { interval: string; settle: string; timeout: string; acceptedOnly?: boolean; json?: boolean; verbose?: boolean },
+    ) => {
+      const repo = resolve(dir);
+      const interval = positiveNumber(opts.interval);
+      const settle = Number(opts.settle);
+      const timeout = positiveNumber(opts.timeout);
+      if (interval === null || timeout === null || !Number.isFinite(settle) || settle < 0) {
+        console.error("✗ --interval and --timeout take a number above zero, --settle a number of seconds (0 or more)");
+        process.exitCode = 1;
+        return;
+      }
+      const timeoutMs = timeout * 60_000;
+      const finish = (r: WatchTrailResult) => {
+        if (opts.json) console.log(JSON.stringify(watchExitJson(r), null, 2));
+        else for (const line of watchExitLines(r, timeoutMs)) console.log(line);
+        trackWatchExit(repo, r);
+        const code = watchExitCode(r);
+        if (code !== 0) process.exitCode = code;
+      };
+      const link = readLink(repo);
+      if (!link) {
+        finish({ reason: "no_trail", suggested: null, accepted: 0, files: [], reviewUrl: "", waitedMs: 0, everRead: false });
+        return;
+      }
+      const result = await watchTrail(repo, link, {
+        wired: pickedAgents(repo),
+        intervalMs: interval * 1000,
+        settleMs: settle * 1000,
+        timeoutMs,
+        acceptedOnly: opts.acceptedOnly === true,
+        onTick: opts.verbose
+          ? (r) => {
+              const at = new Date().toTimeString().slice(0, 8);
+              if (!r.ok) console.error(`· ${at} ${r.fatal ? "refused" : "retrying next check"}: ${r.error}`);
+              else console.error(`· ${at} ${r.snapshot.suggested ?? "?"} suggested, ${r.snapshot.accepted} accepted`);
+            }
+          : undefined,
+      });
+      finish(result);
+    },
+  );
+
 brain
   .command("push")
   .description("Read THIS repo on your machine and build its trail — no GitHub App, works on private repos")
@@ -1589,6 +1672,13 @@ brain
     // Set when this run opened the browser, which then sits on Trail's build
     // page: the closing lines point at that tab instead of printing a new link.
     let browserOpen = false;
+    if (!link && process.env[AUTOPUSH_CHILD_ENV]) {
+      // Started in the background by the session-start hook, which only does so
+      // for a repo with a trail. The link has gone since (a disconnect in the
+      // same moment): signing up would open a browser nobody asked for, so stop.
+      console.error("· background push skipped — this repo no longer has a trail attached");
+      return;
+    }
     if (!link) {
       if (!here) {
         console.error("✗ this directory has no GitHub origin remote — graft can only push a GitHub repository today");
@@ -1677,6 +1767,9 @@ brain
       process.exitCode = 1;
       return;
     }
+    // What the session-start hook's background refresh compares HEAD against:
+    // a push of history Trail already has would mine the same rules again.
+    recordTrailPush(repo, ctx.headSha);
     const fmt = (x: number) => x.toLocaleString("en-US");
     const trailLabel = expected?.brainName ? `“${expected.brainName}”` : `${d.owner}/${d.name}`;
     console.error(
